@@ -69,6 +69,28 @@ function reportsFrom(history) {
   return Object.values(history).sort((a, b) => String(a.date).localeCompare(String(b.date)));
 }
 
+function movementStats(report) {
+  const rows = Array.isArray(report?.rows) ? report.rows : [];
+  const active = rows.filter((row) => (Number(row.pieces) || 0) > 0 || (Number(row.money) || 0) > 0);
+  return {
+    stores: new Set(active.map((row) => String(row.store || "").trim().toUpperCase()).filter(Boolean)).size,
+    pieces: rows.reduce((sum, row) => sum + (Number(row.pieces) || 0), 0),
+    money: rows.reduce((sum, row) => sum + (Number(row.money) || 0), 0),
+    details: Array.isArray(report?.details) ? report.details.length : 0,
+  };
+}
+
+function isRegression(existing, incoming) {
+  if (!existing) return false;
+  const oldStats = movementStats(existing);
+  const newStats = movementStats(incoming);
+  // Never allow a partial/stale import to replace a fuller report for the same day.
+  return newStats.stores < oldStats.stores ||
+    newStats.pieces < oldStats.pieces ||
+    newStats.money + 0.009 < oldStats.money ||
+    newStats.details < oldStats.details;
+}
+
 function validateReport(report) {
   if (!report || !/^\d{4}-\d{2}-\d{2}$/.test(String(report.date || ""))) {
     throw new Error("La fecha del reporte no es válida.");
@@ -102,6 +124,8 @@ export default async function handler(req, res) {
       validateReport(body);
 
       const date = body.date;
+      const currentHistory = await readHistory();
+      const existing = currentHistory[date];
       const report = {
         date,
         importedStores: [...new Set(body.importedStores.map((x) => String(x || "").trim()).filter(Boolean))],
@@ -109,6 +133,17 @@ export default async function handler(req, res) {
         details: body.details,
         updatedAt: new Date().toISOString(),
       };
+
+      if (isRegression(existing, report)) {
+        const previous = movementStats(existing);
+        const incoming = movementStats(report);
+        return res.status(409).json({
+          error: `Carga detenida para proteger el reporte ${date}: el archivo nuevo trae ${incoming.stores} tiendas con resurtido, ${incoming.pieces} piezas y ${incoming.details} detalles; el reporte guardado tiene ${previous.stores} tiendas, ${previous.pieces} piezas y ${previous.details} detalles. No se reemplazó el historial.`,
+          protected: true,
+          saved: previous,
+          incoming,
+        });
+      }
 
       // Archivo único por intento: no se sobrescribe una ruta compartida.
       const nonce = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
