@@ -1,0 +1,8 @@
+name = "resurtido-costillas-cloudflare"
+compatibility_date = "2026-11-17"
+pages_build_output_dir = "."
+
+[[d1_databases]]
+binding = "DB"
+database_name = "resurtido-costillas-db"
+database_id = "5a2fcf5c-cbbf-4a78-bc33-34a2a7b2dab8"
