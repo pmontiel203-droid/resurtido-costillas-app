@@ -26,8 +26,11 @@ function validate(report) {
   }
 }
 async function getReports(db) {
-  const result = await db.prepare("SELECT payload FROM reports ORDER BY report_date ASC").all();
-  return (result.results || []).map((row) => JSON.parse(row.payload));
+  const result = await db
+    .prepare("SELECT report_json FROM daily_reports ORDER BY date ASC")
+    .all();
+
+  return (result.results || []).map((row) => JSON.parse(row.report_json));
 }
 
 export async function onRequestOptions() {
@@ -41,25 +44,33 @@ export async function onRequestGet({ env }) {
   catch (e) { return json({ error: e?.message || "No se pudo leer el historial." }, 500); }
 }
 export async function onRequestPost({ request, env }) {
-  try {
-    const report = await request.json();
-    validate(report);
-    const old = await env.DB.prepare("SELECT payload FROM reports WHERE report_date = ?")
-      .bind(report.date).first();
-    const existing = old ? JSON.parse(old.payload) : null;
+try {
+  const report = await request.json();
+  validate(report); const old = await env.DB.prepare("SELECT report_json FROM daily_reports WHERE date = ?")
+  .bind(report.date).first();
+const existing = old ? JSON.parse(old.report_json) : null;
+   
+   
     if (regression(existing, report)) {
       return json({ error: `Carga detenida para proteger el reporte ${report.date}: el archivo nuevo trae menos información que el guardado. No se reemplazó el historial.`, protected: true, saved: stats(existing), incoming: stats(report) }, 409);
     }
-    const clean = {
-      date: report.date,
-      importedStores: [...new Set(report.importedStores.map((x) => String(x || "").trim()).filter(Boolean))],
-      rows: report.rows,
-      details: report.details,
-      updatedAt: new Date().toISOString()
-    };
-    await env.DB.prepare(`INSERT INTO reports (report_date, updated_at, payload) VALUES (?, ?, ?)
-      ON CONFLICT(report_date) DO UPDATE SET updated_at=excluded.updated_at, payload=excluded.payload`)
-      .bind(clean.date, clean.updatedAt, JSON.stringify(clean)).run();
+  const clean = {
+  date: report.date,
+  importedStores: [...new Set(report.importedStores.map((x) => String(x || "").trim()).filter(Boolean))],
+  rows: report.rows,
+  details: report.details,
+  updatedAt: new Date().toISOString()
+};
+
+await env.DB.prepare(`
+  INSERT INTO daily_reports (date, updated_at, report_json)
+  VALUES (?, ?, ?)
+  ON CONFLICT(date) DO UPDATE SET
+    updated_at = excluded.updated_at,
+    report_json = excluded.report_json
+`)
+.bind(clean.date, clean.updatedAt, JSON.stringify(clean))
+.run();
     return json({ success: true, reports: await getReports(env.DB), savedDate: clean.date,
       savedRows: clean.rows.length, savedDetails: clean.details.length });
   } catch (e) { return json({ error: e?.message || "No se pudo guardar el historial." }, 500); }
